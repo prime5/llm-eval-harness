@@ -1,0 +1,139 @@
+# Complex explanation eval suite
+#
+# These cases test open-ended explanations where there is no single
+# correct answer. Scoring is necessarily approximate at Phase 1 —
+# we check for presence of key concepts, appropriate depth, and
+# absence of refusals. Subtle quality issues (e.g. incorrect causal
+# reasoning) require LLM-as-judge scoring, planned for Phase 2.
+#
+# Design notes per case explain WHY each scorer threshold was chosen.
+
+cases:
+  # ------------------------------------------------------------------ #
+  # Biology / Health                                                     #
+  # ------------------------------------------------------------------ #
+  - id: cx_001
+    description: DOMS — tests scientific accuracy via concept coverage
+    tags: [complex, biology, explanation_quality, phase2_candidate]
+    prompt: "Explain Delayed Onset of Muscle Soreness (DOMS)."
+    variance_runs: 3
+    scorers:
+      # Core concepts that any accurate explanation must include.
+      # threshold: 0.5 = at least 3 of 6 must appear.
+      # A response mentioning only "sore muscles" scores 0 and fails.
+      - type: contains_keywords
+        keywords: [muscle, damage, "24", "48", repair, inflammation]
+        require_all: false
+        threshold: 0.5
+      # An explanation this short is a non-answer.
+      # An explanation this long has likely gone off-topic or repeated itself.
+      - type: length_check
+        min_words: 60
+        max_words: 500
+        threshold: 1.0
+      # Model should not refuse or hedge on a benign biology question.
+      - type: no_forbidden_content
+        forbidden: ["I cannot", "I'm not able", "consult a doctor before"]
+        threshold: 1.0
+    # Phase 1 limitation: keyword scoring cannot verify whether the model
+    # correctly explains the mechanism (micro-tears vs lactic acid myth).
+    # Phase 2 will add LLM-as-judge to score mechanistic accuracy.
+
+  # ------------------------------------------------------------------ #
+  # Computer Science / Concepts                                          #
+  # ------------------------------------------------------------------ #
+  - id: cx_002
+    description: CAP theorem — tests technical depth and accuracy
+    tags: [complex, distributed_systems, explanation_quality, phase2_candidate]
+    prompt: >
+      Explain the CAP theorem. What does it mean for a distributed system
+      designer choosing between consistency, availability, and partition tolerance?
+    variance_runs: 3
+    scorers:
+      - type: contains_keywords
+        keywords: [consistency, availability, partition, trade-off, distributed]
+        require_all: false
+        threshold: 0.6        # 3 of 5 — a vague answer will miss partition/trade-off
+      - type: length_check
+        min_words: 80
+        max_words: 600
+        threshold: 1.0
+      - type: no_forbidden_content
+        forbidden: ["I cannot", "I don't know", "I'm not sure"]
+        threshold: 1.0
+
+  # ------------------------------------------------------------------ #
+  # Multi-step reasoning                                                 #
+  # ------------------------------------------------------------------ #
+  - id: cx_003
+    description: Compound reasoning — tests whether model shows work
+    tags: [complex, reasoning, multi_step]
+    prompt: >
+      A company has 3 data centers. Each handles 40% of traffic normally,
+      with 20% reserved for failover. If one data center goes offline,
+      can the remaining two handle the full load? Show your reasoning.
+    variance_runs: 5
+    scorers:
+      # Answer is: each remaining DC handles 50% (100/2), but capacity
+      # is 40% + 20% = 60%. So yes, they can handle it.
+      # We check for the correct conclusion and key numbers.
+      - type: contains_keywords
+        keywords: ["60", "50", "yes", "handle", "capacity"]
+        require_all: false
+        threshold: 0.6
+      - type: length_check
+        min_words: 40
+        max_words: 300
+        threshold: 1.0
+      # Model should show step-by-step work, not just state the answer.
+      # Presence of math indicators suggests reasoning was shown.
+      - type: regex_match
+        pattern: "(\d+\s*[%+\-*/]\s*\d+|\d+\s*percent)"
+        threshold: 1.0
+
+  # ------------------------------------------------------------------ #
+  # Ambiguous prompt — tests model behavior under uncertainty            #
+  # ------------------------------------------------------------------ #
+  - id: cx_004
+    description: Intentionally vague prompt — model should ask for clarification or make assumptions explicit
+    tags: [complex, ambiguity, robustness]
+    prompt: "Fix the bug."
+    variance_runs: 3
+    scorers:
+      # Model should NOT hallucinate a specific bug fix for a vague prompt.
+      # It should either ask for context or explain it needs more info.
+      - type: contains_keywords
+        keywords: [clarif, context, code, provide, more information, what, which]
+        require_all: false
+        threshold: 0.4
+      # A very long response to this prompt = model hallucinated a specific answer
+      - type: length_check
+        min_words: 5
+        max_words: 150
+        threshold: 1.0
+
+  # ------------------------------------------------------------------ #
+  # Comparison / Trade-off analysis                                      #
+  # ------------------------------------------------------------------ #
+  - id: cx_005
+    description: REST vs GraphQL — tests balanced comparison, not just definition
+    tags: [complex, software_engineering, comparison]
+    prompt: >
+      Compare REST and GraphQL APIs. When would you choose one over the other?
+      Give concrete scenarios for each.
+    variance_runs: 3
+    scorers:
+      # Must mention both technologies with some depth
+      - type: contains_keywords
+        keywords: [REST, GraphQL, endpoint, query, over-fetching, schema, scenario]
+        require_all: false
+        threshold: 0.57       # 4 of 7 — ensures both sides are covered
+      - type: length_check
+        min_words: 100
+        max_words: 700
+        threshold: 1.0
+      # Should offer a concrete recommendation, not just list pros/cons
+      - type: contains_keywords
+        keywords: [when, choose, use case, scenario, recommend, prefer]
+        require_all: false
+        threshold: 0.3

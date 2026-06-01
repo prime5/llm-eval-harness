@@ -1,0 +1,10 @@
+.env
+__pycache__/
+*.pyc
+.pytest_cache/
+eval_report.html
+eval_results.json
+node_modules/
+package.json
+package-lock.json
+pytest-cache-files-d8_pne8m/

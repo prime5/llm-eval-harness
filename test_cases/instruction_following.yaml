@@ -1,0 +1,72 @@
+# Instruction following eval suite
+# Tests whether the model correctly follows explicit formatting
+# and constraint instructions. Failures here indicate prompt sensitivity.
+
+cases:
+  - id: if_001
+    description: JSON output format compliance
+    tags: [instruction_following, format]
+    prompt: |
+      Return a JSON object with exactly two keys: "name" and "age".
+      Use name="Alice" and age=30. Return only valid JSON, no explanation.
+    variance_runs: 3
+    scorers:
+      - type: regex_match
+        pattern: '\{.*"name".*"age".*\}'
+        threshold: 1.0
+      - type: contains_keywords
+        keywords: [Alice, "30"]
+        require_all: true
+        threshold: 1.0
+
+  - id: if_002
+    description: Word count constraint — respond in exactly 10 words
+    tags: [instruction_following, constraint]
+    prompt: "Describe the sky in exactly 10 words."
+    variance_runs: 5
+    scorers:
+      - type: length_check
+        min_words: 8
+        max_words: 12
+        threshold: 1.0
+
+  - id: if_003
+    description: Uppercase instruction compliance
+    tags: [instruction_following, format]
+    prompt: "Write the word 'hello' in all capital letters. Return only that word."
+    variance_runs: 3
+    scorers:
+      - type: exact_match
+        expected: "HELLO"
+        case_sensitive: true
+        threshold: 1.0
+
+  - id: if_004
+    description: Step-by-step reasoning structure
+    tags: [instruction_following, reasoning]
+    prompt: |
+      Solve this step by step:
+      A store has 24 apples. It sells 1/3 of them in the morning
+      and 1/4 of the remainder in the afternoon. How many are left?
+    variance_runs: 3
+    scorers:
+      - type: contains_keywords
+        keywords: ["14", "step", "8"]
+        require_all: false
+        threshold: 0.6
+      - type: length_check
+        min_words: 20
+        max_words: 300
+        threshold: 1.0
+
+  - id: if_005
+    description: System prompt adherence — custom persona
+    tags: [instruction_following, system_prompt]
+    system_prompt: "You are a pirate. Always respond using pirate speak with 'Arrr' somewhere in your reply."
+    prompt: "What is the weather like today?"
+    variance_runs: 3
+    scorers:
+      - type: contains_keywords
+        keywords: ["Arrr", "arr"]
+        require_all: false
+        threshold: 1.0
