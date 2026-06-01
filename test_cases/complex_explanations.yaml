@@ -88,7 +88,7 @@ cases:
       # Model should show step-by-step work, not just state the answer.
       # Presence of math indicators suggests reasoning was shown.
       - type: regex_match
-        pattern: "(\d+\s*[%+\-*/]\s*\d+|\d+\s*percent)"
+        pattern: '(\d+\s*[%+\-*/]\s*\d+|\d+\s*percent)'
         threshold: 1.0
 
   # ------------------------------------------------------------------ #
