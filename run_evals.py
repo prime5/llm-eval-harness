@@ -33,6 +33,7 @@ colorama_init()
 DEFAULT_SUITES = [
     "test_cases/basic_qa.yaml",
     "test_cases/instruction_following.yaml",
+    "test_cases/complex_explanations.yaml",
 ]
 
 
