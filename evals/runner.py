@@ -205,6 +205,14 @@ class EvalRunner:
                         forbidden=spec["forbidden"],
                         threshold=spec.get("threshold", 1.0),
                     ))
+                elif stype == "llm_judge":
+                    results.append(Scorer.llm_judge(
+                        text,
+                        judge_prompt=spec["judge_prompt"],
+                        pass_if=spec.get("pass_if", "NO"),
+                        provider=self._provider,
+                        threshold=spec.get("threshold", 1.0),
+                    ))
 
             if len(results) == 1:
                 return results[0]

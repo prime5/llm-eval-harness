@@ -36,6 +36,13 @@ DEFAULT_SUITES = [
     "test_cases/complex_explanations.yaml",
 ]
 
+ADVERSARIAL_SUITES = [
+    "test_cases/prompt_injection.yaml",
+    "test_cases/hallucination.yaml",
+    "test_cases/safety_compliance.yaml",
+    "test_cases/jailbreak.yaml",
+]
+
 
 def parse_args():
     p = argparse.ArgumentParser(description="LLM Eval Harness — Phase 1")
@@ -46,6 +53,10 @@ def parse_args():
     p.add_argument("--format", choices=["html", "json", "both"], default="both",
                    help="Report output format")
     p.add_argument("--output-dir", default=".", help="Directory for report files")
+    p.add_argument("--adversarial", action="store_true",
+                   help="Run Phase 2 adversarial suites instead of default suites")
+    p.add_argument("--all", action="store_true", dest="run_all",
+                   help="Run ALL suites — Phase 1 + Phase 2")
     p.add_argument("--min-pass-rate", type=float, default=0.0,
                    help="Exit code 1 if overall pass rate below this (0.0–1.0). Useful for CI.")
     p.add_argument("--variance-runs", type=int, default=None,
@@ -101,8 +112,16 @@ def main():
     variance_runs = args.variance_runs or VARIANCE_RUNS
     runner = EvalRunner(provider, variance_runs=variance_runs)
 
+    # Determine which suites to run
+    if args.run_all:
+        suites = DEFAULT_SUITES + ADVERSARIAL_SUITES
+    elif args.adversarial:
+        suites = ADVERSARIAL_SUITES
+    else:
+        suites = args.suite
+
     all_results = []
-    for suite_path in args.suite:
+    for suite_path in suites:
         if not Path(suite_path).exists():
             print(f"{Fore.YELLOW}⚠ Suite not found: {suite_path}{Style.RESET_ALL}")
             continue
