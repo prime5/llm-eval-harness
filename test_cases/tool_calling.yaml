@@ -1,0 +1,132 @@
+cases:
+  # tc_001 — single required argument
+  - id: tc_001
+    type: tool_call
+    description: Weather query triggers get_weather with correct location
+    tags: [tool-call, smoke]
+    prompt: "What's the weather like in San Francisco right now?"
+    tools:
+      - name: get_weather
+        description: "Get the current weather for a given city"
+        parameters:
+          type: object
+          properties:
+            location:
+              type: string
+              description: "City name, e.g. 'San Francisco'"
+          required: [location]
+    scorers:
+      - type: tool_call_match
+        expected_function: get_weather
+        expected_args:
+          location: San Francisco
+
+  # tc_002 — multiple arguments, type checking
+  - id: tc_002
+    type: tool_call
+    description: Calendar event creation with multiple required arguments
+    tags: [tool-call, multi-arg]
+    prompt: "Schedule a meeting called 'Design Review' tomorrow at 2pm for 1 hour."
+    tools:
+      - name: create_calendar_event
+        description: "Create a new calendar event"
+        parameters:
+          type: object
+          properties:
+            title:
+              type: string
+              description: "Event title"
+            duration_minutes:
+              type: integer
+              description: "Duration in minutes"
+          required: [title, duration_minutes]
+    scorers:
+      - type: tool_call_match
+        expected_function: create_calendar_event
+        expected_args:
+          title: Design Review
+          duration_minutes: "60"
+        require_all_args: false
+
+  # tc_003 — correct tool selected from two options
+  - id: tc_003
+    type: tool_call
+    description: Currency conversion query selects convert_currency, not search_web
+    tags: [tool-call, tool-selection]
+    prompt: "How many euros is 100 US dollars?"
+    tools:
+      - name: convert_currency
+        description: "Convert an amount from one currency to another"
+        parameters:
+          type: object
+          properties:
+            amount:
+              type: number
+              description: "The amount to convert"
+            from_currency:
+              type: string
+              description: "Source currency code, e.g. USD"
+            to_currency:
+              type: string
+              description: "Target currency code, e.g. EUR"
+          required: [amount, from_currency, to_currency]
+      - name: search_web
+        description: "Search the internet for information"
+        parameters:
+          type: object
+          properties:
+            query:
+              type: string
+          required: [query]
+    scorers:
+      - type: tool_call_match
+        expected_function: convert_currency
+        expected_args:
+          from_currency: USD
+          to_currency: EUR
+
+  # tc_004 — model should NOT call a tool (factual question answered directly)
+  - id: tc_004
+    type: tool_call
+    description: Simple factual question answered directly without tool call
+    tags: [tool-call, no-tool]
+    prompt: "What is the capital of France?"
+    tools:
+      - name: search_web
+        description: "Search the internet for information"
+        parameters:
+          type: object
+          properties:
+            query:
+              type: string
+          required: [query]
+    scorers:
+      - type: no_tool_call
+      - type: contains_keywords
+        keywords: [Paris]
+        require_all: true
+
+  # tc_005 — structured output via tool call (search with specific args)
+  - id: tc_005
+    type: tool_call
+    description: Code search query maps correctly to search_codebase tool
+    tags: [tool-call, developer]
+    prompt: "Find all Python files that import the 'requests' library in this repo."
+    tools:
+      - name: search_codebase
+        description: "Search source code files with a query"
+        parameters:
+          type: object
+          properties:
+            query:
+              type: string
+              description: "Search query or pattern"
+            file_type:
+              type: string
+              description: "File extension filter, e.g. 'py', 'js'"
+          required: [query]
+    scorers:
+      - type: tool_call_match
+        expected_function: search_codebase
+        expected_args:
+          file_type: py

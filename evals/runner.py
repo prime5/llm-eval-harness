@@ -46,6 +46,8 @@ class EvalResult:
     scorer_result: ScorerResult
     variance_report: Optional[VarianceReport]
     latency_ms: float
+    prompt_tokens: int = 0
+    completion_tokens: int = 0
     tags: list[str] = field(default_factory=list)
     error: Optional[str] = None
 
@@ -62,6 +64,8 @@ class EvalResult:
             "scorer_explanation": self.scorer_result.explanation if self.scorer_result else None,
             "response_preview": self.response[:200] + "..." if len(self.response) > 200 else self.response,
             "latency_ms": round(self.latency_ms, 1),
+            "prompt_tokens": self.prompt_tokens,
+            "completion_tokens": self.completion_tokens,
             "variance": self.variance_report.summary() if self.variance_report else None,
             "tags": self.tags,
             "error": self.error,
@@ -124,13 +128,17 @@ class EvalRunner:
 
             # Build scorer from YAML spec
             scorer_fn = self._build_scorer(case.get("scorers", []))
-            primary_result = scorer_fn(response.text)
+            primary_result = scorer_fn(response.text, tool_calls=response.tool_calls)
 
             # Variance analysis (only if variance_runs > 1)
             variance_report = None
             if variance_runs > 1:
                 analyzer = VarianceAnalyzer(self._provider, runs=variance_runs)
-                variance_report = analyzer.analyze(request, scorer_fn, case_id=case_id)
+                variance_report = analyzer.analyze(
+                    request,
+                    lambda text, **kw: scorer_fn(text, **kw),
+                    case_id=case_id,
+                )
 
             return EvalResult(
                 case_id=case_id,
@@ -140,6 +148,8 @@ class EvalRunner:
                 scorer_result=primary_result,
                 variance_report=variance_report,
                 latency_ms=latency_ms,
+                prompt_tokens=response.prompt_tokens,
+                completion_tokens=response.completion_tokens,
                 tags=tags,
             )
 
@@ -161,16 +171,17 @@ class EvalRunner:
         """
         Convert YAML scorer specs into a callable that scores a response.
         Multiple scorers are aggregated with 'mean' strategy by default.
+
+        The returned callable accepts (text, tool_calls=None) so that
+        tool_call_match scorers can access structured tool call data.
         """
         if not scorer_specs:
-            # Default: just check response is non-empty
-            return lambda text: Scorer.length_check(text, min_words=1)
+            return lambda text, **kw: Scorer.length_check(text, min_words=1)
 
-        def scorer_fn(text: str) -> ScorerResult:
+        def scorer_fn(text: str, tool_calls=None) -> ScorerResult:
             results = []
             for spec in scorer_specs:
                 stype = spec.get("type", "")
-                agg = spec.get("aggregate", "mean")
 
                 if stype == "exact_match":
                     results.append(Scorer.exact_match(
@@ -211,6 +222,20 @@ class EvalRunner:
                         judge_prompt=spec["judge_prompt"],
                         pass_if=spec.get("pass_if", "NO"),
                         provider=self._provider,
+                        threshold=spec.get("threshold", 1.0),
+                    ))
+                elif stype == "tool_call_match":
+                    results.append(Scorer.tool_call_match(
+                        tool_calls,
+                        expected_function=spec["expected_function"],
+                        expected_args=spec.get("expected_args"),
+                        require_all_args=spec.get("require_all_args", False),
+                        threshold=spec.get("threshold", 1.0),
+                    ))
+                elif stype == "json_schema_match":
+                    results.append(Scorer.json_schema_match(
+                        text,
+                        schema=spec["schema"],
                         threshold=spec.get("threshold", 1.0),
                     ))
 

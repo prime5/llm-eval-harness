@@ -224,6 +224,160 @@ Answer with {pass_if} or its opposite, then briefly explain."""
             )
 
     # ------------------------------------------------------------------ #
+    # Tool call validation                                                 #
+    # ------------------------------------------------------------------ #
+    @staticmethod
+    def tool_call_match(
+        tool_calls: list | None,
+        expected_function: str,
+        expected_args: dict | None = None,
+        require_all_args: bool = False,
+        threshold: float = 1.0,
+    ) -> ScorerResult:
+        """
+        Validate that the model called the expected function with the right args.
+
+        Scoring:
+          - 0.0  if expected function was not called at all
+          - 0.5  if function was called but required args are missing/wrong
+          - 1.0  if function was called and all checked args match
+
+        expected_args: spot-check dict — keys to verify, values can be partial strings
+                       (substring match, case-insensitive)
+        require_all_args: if True, all expected_args keys must match exactly
+        """
+        if not tool_calls:
+            return ScorerResult(
+                score=0.0,
+                passed=False,
+                strategy="tool_call_match",
+                explanation=f"No tool was called; expected '{expected_function}'",
+                threshold=threshold,
+                details={"expected": expected_function, "called": None},
+            )
+
+        called_names = [tc["name"] for tc in tool_calls]
+        matching = [tc for tc in tool_calls if tc["name"] == expected_function]
+
+        if not matching:
+            return ScorerResult(
+                score=0.0,
+                passed=False,
+                strategy="tool_call_match",
+                explanation=f"Expected '{expected_function}' but model called {called_names}",
+                threshold=threshold,
+                details={"expected": expected_function, "called": called_names},
+            )
+
+        tc = matching[0]
+        args = tc.get("arguments", {})
+
+        if not expected_args:
+            return ScorerResult(
+                score=1.0,
+                passed=True,
+                strategy="tool_call_match",
+                explanation=f"Called '{expected_function}' correctly",
+                threshold=threshold,
+                details={"expected": expected_function, "arguments": args},
+            )
+
+        hits, misses = [], []
+        for key, expected_val in expected_args.items():
+            if key not in args:
+                misses.append(f"{key}=<missing> (expected ~{expected_val!r})")
+                continue
+            actual_val = args[key]
+            expected_str = str(expected_val).lower()
+            actual_str = str(actual_val).lower()
+            if expected_str in actual_str or actual_str in expected_str:
+                hits.append(key)
+            else:
+                misses.append(f"{key}={actual_val!r} (expected ~{expected_val!r})")
+
+        if require_all_args and misses:
+            score = 0.5
+        elif misses:
+            score = len(hits) / len(expected_args) * 1.0
+            score = max(0.5, score)  # function was called, partial credit
+        else:
+            score = 1.0
+
+        return ScorerResult(
+            score=score,
+            passed=score >= threshold,
+            strategy="tool_call_match",
+            explanation=f"Called '{expected_function}' | args matched: {hits} | mismatched: {misses}",
+            threshold=threshold,
+            details={"expected": expected_function, "arguments": args, "hits": hits, "misses": misses},
+        )
+
+    # ------------------------------------------------------------------ #
+    # JSON schema validation                                               #
+    # ------------------------------------------------------------------ #
+    @staticmethod
+    def json_schema_match(
+        response: str,
+        schema: dict,
+        threshold: float = 1.0,
+    ) -> ScorerResult:
+        """
+        Validate that the response is valid JSON conforming to a schema.
+        Performs structural validation (required keys, types) without jsonschema dep.
+        """
+        import json as _json
+
+        try:
+            data = _json.loads(response.strip())
+        except _json.JSONDecodeError as exc:
+            return ScorerResult(
+                score=0.0,
+                passed=False,
+                strategy="json_schema_match",
+                explanation=f"Response is not valid JSON: {exc}",
+                threshold=threshold,
+            )
+
+        required_keys = schema.get("required", [])
+        properties = schema.get("properties", {})
+        missing, type_errors = [], []
+
+        for key in required_keys:
+            if key not in data:
+                missing.append(key)
+            elif key in properties:
+                expected_type = properties[key].get("type")
+                type_map = {"string": str, "number": (int, float), "integer": int,
+                            "boolean": bool, "array": list, "object": dict}
+                expected_py_type = type_map.get(expected_type)
+                if expected_py_type and not isinstance(data[key], expected_py_type):
+                    type_errors.append(f"{key}: expected {expected_type}, got {type(data[key]).__name__}")
+
+        if missing or type_errors:
+            explanation = ""
+            if missing:
+                explanation += f"Missing required keys: {missing}. "
+            if type_errors:
+                explanation += f"Type errors: {type_errors}."
+            return ScorerResult(
+                score=0.0,
+                passed=False,
+                strategy="json_schema_match",
+                explanation=explanation.strip(),
+                threshold=threshold,
+                details={"missing": missing, "type_errors": type_errors},
+            )
+
+        return ScorerResult(
+            score=1.0,
+            passed=True,
+            strategy="json_schema_match",
+            explanation="Response is valid JSON matching the schema",
+            threshold=threshold,
+            details={"parsed": data},
+        )
+
+    # ------------------------------------------------------------------ #
     # Composite                                                            #
     # ------------------------------------------------------------------ #
     @staticmethod

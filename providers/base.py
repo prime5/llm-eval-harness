@@ -14,6 +14,8 @@ class CompletionRequest:
     model: Optional[str] = None
     temperature: float = 0.7
     max_tokens: int = 512
+    tools: Optional[list] = None          # OpenAI-style function definitions
+    messages: Optional[list] = None       # pre-built message history (overrides prompt/system_prompt)
 
 
 @dataclass
@@ -25,6 +27,7 @@ class CompletionResponse:
     completion_tokens: int = 0
     latency_ms: float = 0.0
     raw: dict = field(default_factory=dict)
+    tool_calls: Optional[list] = None     # [{id, name, arguments}] normalized across providers
 
 
 class BaseProvider(ABC):

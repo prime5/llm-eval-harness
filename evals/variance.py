@@ -112,7 +112,7 @@ class VarianceAnalyzer:
             resp = self._provider.complete(request)
             responses.append(resp.text)
             latencies.append(resp.latency_ms)
-            scorer_results.append(scorer_fn(resp.text))
+            scorer_results.append(scorer_fn(resp.text, tool_calls=resp.tool_calls))
 
         return VarianceReport(
             case_id=case_id,

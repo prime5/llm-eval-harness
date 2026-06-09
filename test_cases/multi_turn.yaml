@@ -1,0 +1,88 @@
+cases:
+  # mt_001 — context retention: name remembered across turns
+  - id: mt_001
+    type: multi_turn
+    description: Model retains user name across conversation turns
+    tags: [multi-turn, memory, smoke]
+    system_prompt: "You are a helpful assistant. Remember everything the user tells you."
+    turns:
+      - user: "Hi, my name is Alice and I'm a software engineer."
+        scorers: []
+      - user: "What's my name and what do I do?"
+        scorers:
+          - type: contains_keywords
+            keywords: [Alice]
+            require_all: true
+          - type: contains_keywords
+            keywords: [engineer, software, developer]
+            require_all: false
+            threshold: 0.33
+
+  # mt_002 — instruction persistence: formatting rule holds across multiple turns
+  - id: mt_002
+    type: multi_turn
+    description: Formatting instruction given in turn 1 persists through turn 3
+    tags: [multi-turn, instruction-following]
+    system_prompt: "You are a helpful assistant."
+    turns:
+      - user: "For the rest of our conversation, always respond using bullet points only. No prose paragraphs."
+        scorers: []
+      - user: "List three benefits of unit testing."
+        scorers:
+          - type: regex_match
+            pattern: "^\\s*[-*•]|^\\s*\\d+\\."
+      - user: "Now list three drawbacks of microservices."
+        scorers:
+          - type: regex_match
+            pattern: "^\\s*[-*•]|^\\s*\\d+\\."
+
+  # mt_003 — correction acknowledgment: model updates its belief after user correction
+  - id: mt_003
+    type: multi_turn
+    description: Model accepts and applies user correction in subsequent turn
+    tags: [multi-turn, correction]
+    system_prompt: "You are a helpful assistant."
+    turns:
+      - user: "I need to book a flight to London on the 15th of March."
+        scorers: []
+      - user: "Actually, I meant the 16th of March, not the 15th. Can you confirm the updated date?"
+        scorers:
+          - type: contains_keywords
+            keywords: ["16", "16th", "March 16", "March 16th"]
+            require_all: false
+            threshold: 0.25
+          - type: no_forbidden_content
+            forbidden: ["15th", "March 15"]
+
+  # mt_004 — persona consistency: assigned role maintained throughout conversation
+  - id: mt_004
+    type: multi_turn
+    description: Model maintains assigned expert persona across all turns
+    tags: [multi-turn, persona]
+    system_prompt: >
+      You are Dr. Morgan, a marine biologist specializing in deep-sea ecosystems.
+      Always respond in character as Dr. Morgan with relevant scientific expertise.
+    turns:
+      - user: "What's your area of expertise?"
+        scorers:
+          - type: contains_keywords
+            keywords: [marine, ocean, sea, biology, deep]
+            require_all: false
+            threshold: 0.4
+      - user: "Tell me something surprising about anglerfish."
+        scorers:
+          - type: contains_keywords
+            keywords: [anglerfish, deep, light, bioluminescent, lure, prey, fish]
+            require_all: false
+            threshold: 0.28
+          - type: length_check
+            min_words: 30
+            max_words: 300
+      - user: "What do you think about climate change's impact on your field?"
+        scorers:
+          - type: contains_keywords
+            keywords: [temperature, ocean, species, habitat, ecosystem, warming, climate]
+            require_all: false
+            threshold: 0.28
+          - type: no_forbidden_content
+            forbidden: ["I don't know", "I'm not sure", "I cannot"]
