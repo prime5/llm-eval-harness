@@ -1,0 +1,111 @@
+name: LLM Eval CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  # ------------------------------------------------------------------ #
+  # Job 1: Offline unit tests — no API key required, always runs        #
+  # ------------------------------------------------------------------ #
+  offline-tests:
+    name: Offline Tests
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Run unit tests
+        run: python3 -m pytest tests/ -v --tb=short
+
+  # ------------------------------------------------------------------ #
+  # Job 2: Live eval + drift gate — requires OPENAI_API_KEY secret      #
+  # Runs a fast subset (basic_qa + instruction_following, variance=1)   #
+  # and fails the build if pass rate drops below 80% or regressions     #
+  # appear against the stored baseline artifact.                        #
+  # ------------------------------------------------------------------ #
+  eval-ci:
+    name: Eval CI Gate
+    runs-on: ubuntu-latest
+    needs: offline-tests        # only run if unit tests pass
+    if: ${{ vars.RUN_LIVE_EVALS == 'true' || github.ref == 'refs/heads/main' }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      # Download the stored baseline from a previous successful run on main.
+      # On the very first run (no artifact yet) this step is skipped gracefully.
+      - name: Download baseline artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: eval-baseline
+          path: .
+        continue-on-error: true   # first run: no baseline exists yet
+
+      - name: Run eval suite
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+        run: |
+          python3 run_evals.py \
+            --suite test_cases/basic_qa.yaml test_cases/instruction_following.yaml \
+            --format json \
+            --min-pass-rate 0.8 \
+            --variance-runs 1
+
+      - name: Check score drift
+        run: |
+          if [ -f eval_baseline.json ]; then
+            python3 detect_drift.py \
+              --baseline eval_baseline.json \
+              --current eval_results.json \
+              --fail-on-regression \
+              --output drift_report.json
+          else
+            echo "No baseline found — skipping drift check (first run)"
+          fi
+
+      - name: Save current run as new baseline
+        run: cp eval_results.json eval_baseline.json
+
+      # Upload the updated baseline so the next run can compare against it.
+      # Only update baseline on main branch to avoid PR branches polluting it.
+      - name: Upload baseline artifact
+        if: github.ref == 'refs/heads/main'
+        uses: actions/upload-artifact@v4
+        with:
+          name: eval-baseline
+          path: eval_baseline.json
+          retention-days: 90
+
+      - name: Upload eval reports
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: eval-reports-${{ github.run_number }}
+          path: |
+            eval_report.html
+            eval_results.json
+            drift_report.json
+          retention-days: 30

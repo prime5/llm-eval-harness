@@ -24,9 +24,9 @@ This harness treats those challenges as first-class engineering problems, not af
 | Phase | Focus | Status |
 |-------|-------|--------|
 | **1 — Core Eval Framework** | Runner, scorers, variance analysis, YAML test cases, HTML reports | ✅ Done |
-| 2 — Adversarial & Safety Testing | Prompt injection, hallucination detection, policy compliance | 🔜 |
-| 3 — Multi-Agent Workflow Testing | Tool use validation, chain-of-thought consistency, pass@k | 🔜 |
-| 4 — Observability & CI/CD Pipeline | GitHub Actions, score drift detection, metrics dashboard | 🔜 |
+| **2 — Adversarial & Safety Testing** | Prompt injection, hallucination detection, policy compliance | ✅ Done |
+| **3 — Multi-Agent Workflow Testing** | Tool call validation, multi-turn conversation testing, AgentRunner | ✅ Done |
+| **4 — Observability & CI/CD Pipeline** | GitHub Actions, score drift detection, Streamlit dashboard, Slack alerts | ✅ Done |
 
 ---
 
@@ -92,6 +92,15 @@ python run_evals.py --provider anthropic
 
 # Run specific suite only
 python run_evals.py --suite test_cases/basic_qa.yaml
+
+# Run Phase 2 adversarial suites
+python run_evals.py --adversarial
+
+# Run Phase 3 agent suites (tool calling + multi-turn)
+python run_evals.py --agent
+
+# Run ALL suites — Phase 1 + Phase 2 + Phase 3
+python run_evals.py --all
 
 # CI mode — exit 1 if pass rate below 80%
 python run_evals.py --min-pass-rate 0.8
@@ -178,6 +187,83 @@ cases:
 | `regex_match` | `pattern` | Response must match regex |
 | `length_check` | `min_words`, `max_words` | Word count must be in range |
 | `no_forbidden_content` | `forbidden` | Response must not contain these strings |
+| `tool_call_match` | `expected_function` | Model must call the named function with correct args |
+| `json_schema_match` | `schema` | Response must be valid JSON matching the schema |
+| `no_tool_call` | *(none)* | Model must NOT call any tool |
+| `llm_judge` | `judge_prompt`, `pass_if` | Second LLM evaluates response by meaning |
+
+---
+
+## Phase 3: Multi-Agent Workflow Testing
+
+Phase 3 adds an `AgentRunner` that handles two new case types: `tool_call` and `multi_turn`.
+Run them with `python run_evals.py --agent`.
+
+### Tool Call Test Cases
+
+Validate that the model calls the right function with the correct arguments.
+
+```yaml
+cases:
+  - id: tc_001
+    type: tool_call
+    description: Weather query triggers get_weather with correct location
+    tags: [tool-call, smoke]
+    prompt: "What's the weather in San Francisco?"
+    tools:
+      - name: get_weather
+        description: "Get current weather for a city"
+        parameters:
+          type: object
+          properties:
+            location: {type: string}
+          required: [location]
+    scorers:
+      - type: tool_call_match
+        expected_function: get_weather
+        expected_args:
+          location: San Francisco     # substring match, case-insensitive
+      # To assert NO tool is called:
+      # - type: no_tool_call
+```
+
+The `tool_call_match` scorer:
+- Scores **0.0** if the expected function was never called
+- Scores **1.0** if the function was called and all checked args match
+- Scores **0.5–1.0** (partial credit) if the function was called but some args differ
+- Set `require_all_args: true` to require all expected args to match for a pass
+
+### Multi-Turn Test Cases
+
+Drive a full conversation and score each assistant reply against its own scorers.
+The final score is the `min` across all scored turns — every turn must pass.
+
+```yaml
+cases:
+  - id: mt_001
+    type: multi_turn
+    description: Model retains user name across turns
+    system_prompt: "You are a helpful assistant."
+    turns:
+      - user: "Hi, my name is Alice."
+        scorers: []               # nothing to score here
+      - user: "What is my name?"
+        scorers:
+          - type: contains_keywords
+            keywords: [Alice]
+```
+
+### Architecture
+
+```
+evals/
+├── runner.py       # Single-turn: EvalRunner (unchanged from Phase 1/2)
+└── agent_runner.py # Multi-turn + tool call: AgentRunner, AgentEvalResult, TurnResult
+```
+
+`AgentEvalResult` duck-types `EvalResult`'s key interface (`.passed`, `.prompt`, `.response`,
+`.latency_ms`, `.scorer_result`, `.tags`) so all existing reporters and CLI display work
+transparently without modification.
 
 ---
 
@@ -208,17 +294,88 @@ Then register it in `providers/__init__.py`.
 - Policy/safety category classification
 - Jailbreak resistance measurement
 
-**Phase 3 — Multi-Agent Workflow Testing**
-- Tool call validation (function calling correctness)
-- Chain-of-thought consistency scoring
-- pass@k metric implementation
-- Non-deterministic workflow testing patterns
+**Phase 3 — Multi-Agent Workflow Testing** ✅ Done
+- Tool call validation (function calling correctness via `tool_call_match` scorer)
+- Multi-turn conversation testing (context retention, instruction persistence, persona consistency)
+- `AgentRunner` with message history management
+- `json_schema_match` scorer for structured output validation
+- Both OpenAI and Anthropic providers support function/tool definitions
 
-**Phase 4 — Observability & CI Pipeline**
-- GitHub Actions workflow for eval runs on PR
-- Score drift detection between model versions
-- Metrics dashboard (Streamlit)
-- Slack alerts on regression
+**Phase 4 — Observability & CI Pipeline** ✅ Done
+- GitHub Actions: two-job workflow (`offline-tests` always, `eval-ci` on main/when key available)
+- Score drift detection: `detect_drift.py` compares baseline vs current, classifies regressions/improvements/score drops
+- Streamlit dashboard: `streamlit run dashboard.py` — summary metrics, tag breakdown, score/latency charts, drift comparison
+- Slack alerts: `detect_drift.py --slack-webhook URL` posts regression summary to Slack
+- `--save-baseline` / `--check-drift` flags on `run_evals.py` for inline workflow integration
+
+---
+
+## Phase 4: Observability & CI/CD Pipeline
+
+### Score Drift Detection
+
+Compare any two eval runs to surface regressions before they reach production.
+
+```bash
+# Save current results as baseline
+python3 run_evals.py --save-baseline
+
+# On the next run, check for drift automatically
+python3 run_evals.py --check-drift
+
+# Or run standalone drift check
+python3 detect_drift.py \
+  --baseline eval_baseline.json \
+  --current eval_results.json \
+  --threshold 0.1 \
+  --fail-on-regression
+
+# Post Slack alert on regression
+python3 detect_drift.py --slack-webhook https://hooks.slack.com/services/...
+```
+
+Change types detected per case:
+
+| Type | Meaning |
+|------|---------|
+| `regression` | PASS → FAIL (most severe, fails CI) |
+| `improvement` | FAIL → PASS (positive signal) |
+| `score_drop` | Still passing but score fell > threshold |
+| `score_gain` | Still passing but score rose > threshold |
+| `stable` | No meaningful change |
+| `new` / `removed` | Case added or removed since baseline |
+
+### Streamlit Dashboard
+
+```bash
+# Install dashboard dependencies
+pip install streamlit pandas
+
+# Launch
+streamlit run dashboard.py
+
+# Point at a specific report
+streamlit run dashboard.py -- --report path/to/eval_results.json
+```
+
+Shows: summary metrics, pass rate by tag, score distribution, per-case latency,
+score drift comparison (if baseline exists), and a filterable results table.
+
+### GitHub Actions CI
+
+The workflow at `.github/workflows/eval_ci.yml` runs two jobs on every push/PR:
+
+1. **`offline-tests`** — runs `pytest tests/` with no API key; always executes
+2. **`eval-ci`** — runs a fast eval subset (`basic_qa` + `instruction_following`) against the live API, checks drift against the stored baseline artifact, and saves the new run as the updated baseline
+
+**Setup:**
+1. Add `OPENAI_API_KEY` to your GitHub repository secrets
+2. Set the `RUN_LIVE_EVALS` repository variable to `true` to enable job 2
+3. HTML and JSON reports are uploaded as artifacts on every run
+
+The baseline artifact persists between runs via `actions/upload-artifact`. Drift
+detection on CI catches regressions introduced by model version changes or
+prompt modifications before they merge.
 
 ---
 
