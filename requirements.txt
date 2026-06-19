@@ -12,3 +12,10 @@ colorama>=0.4.6
 # Phase 4 — Observability dashboard
 streamlit>=1.30.0
 pandas>=1.5.0
+
+# Phase 5 — RAG evaluation
+chromadb>=0.5.0
+langchain>=0.2.0
+langchain-community>=0.2.0
+langchain-openai>=0.1.0
+langchain-text-splitters>=0.2.0

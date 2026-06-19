@@ -109,3 +109,78 @@ jobs:
             eval_results.json
             drift_report.json
           retention-days: 30
+
+  # ------------------------------------------------------------------ #
+  # Job 3: Phase 5 RAG eval — ingest corpus, run 4-dimension eval suite #
+  # Requires OPENAI_API_KEY; opt-in via RUN_LIVE_EVALS repo variable.   #
+  # ------------------------------------------------------------------ #
+  rag-eval:
+    name: RAG Eval Gate
+    runs-on: ubuntu-latest
+    needs: offline-tests
+    if: ${{ vars.RUN_LIVE_EVALS == 'true' }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      # Download stored RAG baseline from a previous main-branch run.
+      # Skipped gracefully on first run (no artifact yet).
+      - name: Download RAG baseline artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: rag-eval-baseline
+          path: phase5/data/
+        continue-on-error: true
+
+      - name: Ingest corpus into ChromaDB
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+        run: python3 phase5/ingest.py
+
+      - name: Run RAG eval suite
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+        run: |
+          python3 -m phase5.eval_suite \
+            --output phase5/data/rag_eval_results.json
+
+      - name: Check RAG score drift
+        run: |
+          python3 phase5/rag_drift.py \
+            --baseline phase5/data/rag_baseline.json \
+            --current  phase5/data/rag_eval_results.json \
+            --fail-on-regression \
+            --output   phase5/data/rag_drift.json
+
+      # Promote current results to baseline only on main branch
+      - name: Promote results to baseline
+        if: github.ref == 'refs/heads/main'
+        run: cp phase5/data/rag_eval_results.json phase5/data/rag_baseline.json
+
+      - name: Upload RAG baseline artifact
+        if: github.ref == 'refs/heads/main'
+        uses: actions/upload-artifact@v4
+        with:
+          name: rag-eval-baseline
+          path: phase5/data/rag_baseline.json
+          retention-days: 90
+
+      - name: Upload RAG eval reports
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: rag-eval-reports-${{ github.run_number }}
+          path: |
+            phase5/data/rag_eval_results.json
+            phase5/data/rag_drift.json
+          retention-days: 30

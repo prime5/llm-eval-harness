@@ -10,3 +10,9 @@ package-lock.json
 pytest-cache-files-d8_pne8m/
 eval_baseline.json
 drift_report.json
+
+# Phase 5 — RAG evaluation
+phase5/data/chroma_db/
+phase5/data/rag_eval_results.json
+phase5/data/rag_baseline.json
+phase5/data/rag_drift.json

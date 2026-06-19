@@ -27,6 +27,54 @@ This harness treats those challenges as first-class engineering problems, not af
 | **2 — Adversarial & Safety Testing** | Prompt injection, hallucination detection, policy compliance | ✅ Done |
 | **3 — Multi-Agent Workflow Testing** | Tool call validation, multi-turn conversation testing, AgentRunner | ✅ Done |
 | **4 — Observability & CI/CD Pipeline** | GitHub Actions, score drift detection, Streamlit dashboard, Slack alerts | ✅ Done |
+| **5 — RAG Evaluation** | ChromaDB ingestion, retrieval precision, answer faithfulness, adversarial retrieval | ✅ Done |
+
+---
+
+## Phase 5: RAG Evaluation
+
+End-to-end retrieval-augmented generation eval pipeline — corpus ingestion, retrieval quality measurement, LLM-as-judge faithfulness scoring, and CI-gated regression detection.
+
+### Architecture
+
+```
+phase5/
+├── ingest.py          # Load essays → chunk → embed (text-embedding-3-small) → ChromaDB
+├── rag_chain.py       # Retriever + LLM answer generation; returns RAGResult with chunks + answer
+├── eval_suite.py      # 4-dimension eval: precision, faithfulness, sufficiency, adversarial
+├── rag_drift.py       # Compare two eval runs; CI gate on regression (--fail-on-regression)
+└── data/
+    ├── essays/        # Corpus: Paul Graham essays (swap in real essays by dropping .txt files)
+    ├── chroma_db/     # Persisted ChromaDB vector store (gitignored)
+    └── rag_eval_results.json  # Latest eval output
+```
+
+### Eval Dimensions
+
+| Dimension | What it catches | Threshold |
+|---|---|---|
+| Retrieval Precision | Does top-1 chunk come from the correct source essay? | 100% |
+| Answer Faithfulness | LLM-judge: does the answer stay grounded in retrieved context? | score ≥ 0.80 |
+| Context Sufficiency | Does the chain correctly answer in-corpus and refuse out-of-corpus queries? | 100% |
+| Adversarial Retrieval | Does misleading query framing fool the retriever? | ≥ 50% |
+
+### Results (latest run)
+
+All four dimensions passed at 100% / 1.00 on the synthetic PG essay corpus:
+- Adversarial retrieval: 100% (threshold: 50%) — `text-embedding-3-small` not fooled by misleading framing
+- Answer faithfulness: 1.00 — zero hallucination; grounding prompt + `temperature=0` effective
+- Context sufficiency: 100% — all out-of-corpus queries correctly refused with `INSUFFICIENT CONTEXT`
+
+### Quickstart
+
+```bash
+export OPENAI_API_KEY=sk-...
+python3 phase5/ingest.py                          # build vector store
+python3 phase5/rag_chain.py --query "How do you find startup ideas?"
+python3 -m phase5.eval_suite --verbose            # run full eval suite
+python3 phase5/rag_drift.py --fail-on-regression  # check drift vs baseline
+streamlit run dashboard.py                        # view results in Phase 5 tab
+```
 
 ---
 
