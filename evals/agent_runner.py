@@ -294,7 +294,7 @@ class AgentRunner:
                 results.append(Scorer.llm_judge(
                     text,
                     judge_prompt=spec["judge_prompt"],
-                    pass_if=spec.get("pass_if", "YES"),
+                    pass_if=spec["pass_if"],  # required: no silent default
                     provider=self._provider,
                     threshold=spec.get("threshold", 1.0),
                 ))
@@ -414,7 +414,7 @@ class AgentRunner:
                 elif stype == "llm_judge":
                     results.append(Scorer.llm_judge(
                         text, judge_prompt=spec["judge_prompt"],
-                        pass_if=spec.get("pass_if", "YES"),
+                        pass_if=spec["pass_if"],  # required: no silent default
                         provider=self._provider,
                         threshold=spec.get("threshold", 1.0),
                     ))

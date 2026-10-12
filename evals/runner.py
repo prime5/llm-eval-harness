@@ -220,7 +220,7 @@ class EvalRunner:
                     results.append(Scorer.llm_judge(
                         text,
                         judge_prompt=spec["judge_prompt"],
-                        pass_if=spec.get("pass_if", "NO"),
+                        pass_if=spec["pass_if"],  # required: no silent default
                         provider=self._provider,
                         threshold=spec.get("threshold", 1.0),
                     ))

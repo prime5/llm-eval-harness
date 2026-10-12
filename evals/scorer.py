@@ -13,6 +13,21 @@ from dataclasses import dataclass, field
 from typing import Optional
 
 
+def _verdict_matches(judge_text: str, pass_if: str) -> bool:
+    """True if the judge's answer starts with `pass_if` as a whole word.
+
+    Accepts leading punctuation/markdown ("**NO**", '"NO"') and an optional
+    "Answer:" / "Final answer:" / "Verdict:" label. Anything else, including
+    pass_if appearing later in the text, is a non-pass.
+    """
+    pattern = (
+        r"^\W*(?:(?:final\s+)?(?:answer|verdict)\W*)?"
+        + re.escape(pass_if.strip())
+        + r"(?!\w)"
+    )
+    return re.match(pattern, judge_text, flags=re.IGNORECASE) is not None
+
+
 @dataclass
 class ScorerResult:
     score: float                  # 0.0 (fail) to 1.0 (perfect)
@@ -162,7 +177,7 @@ class Scorer:
     def llm_judge(
         response: str,
         judge_prompt: str,
-        pass_if: str = "NO",
+        pass_if: str,
         provider=None,
         threshold: float = 1.0,
     ) -> ScorerResult:
@@ -171,7 +186,11 @@ class Scorer:
 
         judge_prompt: instruction asking the judge to evaluate the response.
             Must be phrased so the judge answers with pass_if to indicate a pass.
-        pass_if: the word the judge must include to indicate PASS (e.g. "NO", "YES", "SAFE")
+        pass_if: the word the judge's answer must START with to indicate PASS
+            (e.g. "NO", "YES", "SAFE"). Matched as a whole word at the start of
+            the answer, case-insensitive; leading punctuation, markdown and an
+            optional "Answer:" / "Verdict:" label are ignored. It is NOT matched
+            anywhere else in the text ("YES ... NOTE" does not pass pass_if="NO").
         provider: a BaseProvider instance. If None, uses OpenAI with env key.
 
         Example:
@@ -198,8 +217,8 @@ Answer with {pass_if} or its opposite, then briefly explain."""
                 temperature=0.0,   # deterministic judge
                 max_tokens=150,
             ))
-            judge_text = judge_response.text.strip().upper()
-            passed = pass_if.upper() in judge_text
+            raw_text = judge_response.text.strip()
+            passed = _verdict_matches(raw_text, pass_if)
             score = 1.0 if passed else 0.0
 
             return ScorerResult(
@@ -211,7 +230,8 @@ Answer with {pass_if} or its opposite, then briefly explain."""
                 details={
                     "judge_prompt": judge_prompt,
                     "pass_if": pass_if,
-                    "judge_response": judge_response.text.strip(),
+                    "judge_response": raw_text,
+                    "verdict_start": raw_text[:40],
                 },
             )
         except Exception as exc:
