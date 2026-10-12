@@ -1,0 +1,22 @@
+# Rubric for multi-turn conversations. Three dimensions, integer scores 0-2.
+# DRAFT anchors from RUBRIC_JUDGE_PLAN.md Appendix B: rewrite them in your own
+# words before you commit P1. Any edit changes the SHA-256 recorded in results.
+version: conversation_v1
+scale: [0, 1, 2]
+dimensions:
+  correctness:
+    0: The answer is wrong, or invents facts the question depended on.
+    1: Mostly right, but with a material omission or a minor error.
+    2: Correct and complete for what was asked.
+  instruction_adherence:
+    0: Breaks an explicit instruction from the system prompt or the user (format, persona, constraint).
+    1: Follows the instructions with a lapse in one turn.
+    2: Follows every instruction in every turn.
+  context_consistency:
+    0: Contradicts or forgets earlier content the answer depends on, including a user correction.
+    1: Uses earlier content, with a slip.
+    2: Uses and tracks earlier content accurately, including corrections.
+rules:
+  - If unsure between two scores, give the lower one.
+  - Each reason must cite turn numbers.
+  - Judge only what is in the conversation.

@@ -1,0 +1,30 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Conversation rubric",
+  "type": "object",
+  "required": ["version", "scale", "dimensions"],
+  "additionalProperties": false,
+  "properties": {
+    "version": {"type": "string", "pattern": "^[a-z0-9_]+$"},
+    "scale": {"const": [0, 1, 2]},
+    "dimensions": {
+      "type": "object",
+      "minProperties": 1,
+      "propertyNames": {"pattern": "^[a-z][a-z0-9_]*$"},
+      "additionalProperties": {
+        "type": "object",
+        "required": ["0", "1", "2"],
+        "additionalProperties": false,
+        "properties": {
+          "0": {"type": "string", "minLength": 1, "pattern": "\\S"},
+          "1": {"type": "string", "minLength": 1, "pattern": "\\S"},
+          "2": {"type": "string", "minLength": 1, "pattern": "\\S"}
+        }
+      }
+    },
+    "rules": {
+      "type": "array",
+      "items": {"type": "string", "minLength": 1, "pattern": "\\S"}
+    }
+  }
+}
