@@ -1,0 +1,605 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://github.com/prime5/llm-eval-harness/sdet/schema/test_plan.schema.json",
+  "title": "TestPlan",
+  "description": "Intermediate representation between a PRD and generated test code. Every test traces to a requirement; every requirement traces to a verbatim PRD quote.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "plan_id",
+    "prd",
+    "sut",
+    "generator",
+    "requirements",
+    "test_cases"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": "0.2"
+    },
+    "plan_id": {
+      "type": "string",
+      "pattern": "^[a-z0-9][a-z0-9-]*$"
+    },
+    "prd": {
+      "description": "The PRD this plan was derived from. sha256 lets the validator flag a plan that is stale against its PRD.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "path",
+        "sha256"
+      ],
+      "properties": {
+        "path": {
+          "type": "string"
+        },
+        "sha256": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{64}$"
+        }
+      }
+    },
+    "sut": {
+      "description": "System under test. Tests pick an environment; base_urls maps environment name to URL.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "name",
+        "base_urls"
+      ],
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "base_urls": {
+          "type": "object",
+          "minProperties": 1,
+          "propertyNames": {
+            "enum": [
+              "live",
+              "local"
+            ]
+          },
+          "additionalProperties": {
+            "type": "string",
+            "pattern": "^https?://"
+          }
+        }
+      }
+    },
+    "generator": {
+      "description": "Who produced the plan. LLM plans must record model and prompt version so variance across runs is attributable.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "generated_at"
+      ],
+      "properties": {
+        "kind": {
+          "enum": [
+            "human",
+            "llm"
+          ]
+        },
+        "model": {
+          "type": "string"
+        },
+        "prompt_version": {
+          "type": "string"
+        },
+        "run_id": {
+          "type": "string"
+        },
+        "generated_at": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "repair_attempts": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "How many times the plan was re-generated after validation errors."
+        }
+      },
+      "if": {
+        "properties": {
+          "kind": {
+            "const": "llm"
+          }
+        }
+      },
+      "then": {
+        "required": [
+          "model",
+          "prompt_version"
+        ]
+      }
+    },
+    "requirements": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "$ref": "#/definitions/requirement"
+      }
+    },
+    "test_cases": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "$ref": "#/definitions/test_case"
+      }
+    },
+    "open_questions": {
+      "description": "Ambiguities or gaps in the PRD. A planner that asks is preferred over one that invents an answer.",
+      "type": "array",
+      "items": {
+        "$ref": "#/definitions/open_question"
+      }
+    },
+    "out_of_scope": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1
+      }
+    }
+  },
+  "definitions": {
+    "requirement_id": {
+      "type": "string",
+      "pattern": "^REQ-[A-Z]{2,4}-[0-9]{3}$"
+    },
+    "requirement": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "source_quote",
+        "summary",
+        "kind",
+        "testable"
+      ],
+      "properties": {
+        "id": {
+          "$ref": "#/definitions/requirement_id"
+        },
+        "source_quote": {
+          "description": "Verbatim text from the PRD (whitespace-normalized). Checked against the PRD to catch fabricated requirements.",
+          "type": "string",
+          "minLength": 10
+        },
+        "summary": {
+          "type": "string",
+          "minLength": 1
+        },
+        "kind": {
+          "enum": [
+            "functional",
+            "nonfunctional",
+            "slo"
+          ]
+        },
+        "testable": {
+          "type": "boolean"
+        },
+        "untestable_reason": {
+          "type": "string",
+          "minLength": 10
+        }
+      },
+      "if": {
+        "properties": {
+          "testable": {
+            "const": false
+          }
+        }
+      },
+      "then": {
+        "required": [
+          "untestable_reason"
+        ]
+      }
+    },
+    "test_case": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "title",
+        "requirement_ids",
+        "category",
+        "priority",
+        "environment",
+        "determinism",
+        "steps",
+        "assertions"
+      ],
+      "properties": {
+        "id": {
+          "type": "string",
+          "pattern": "^TC-[0-9]{3}$"
+        },
+        "title": {
+          "type": "string",
+          "minLength": 1
+        },
+        "requirement_ids": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {
+            "$ref": "#/definitions/requirement_id"
+          }
+        },
+        "category": {
+          "enum": [
+            "functional",
+            "negative",
+            "boundary",
+            "resilience",
+            "performance",
+            "observability",
+            "regression"
+          ]
+        },
+        "priority": {
+          "enum": [
+            "P0",
+            "P1",
+            "P2"
+          ]
+        },
+        "environment": {
+          "description": "live = deployed URL, local = local instance (needed when a test sets headers the edge proxy overwrites), any = either.",
+          "enum": [
+            "live",
+            "local",
+            "any"
+          ]
+        },
+        "determinism": {
+          "description": "stochastic tests must declare how many repetitions and what pass rate counts as passing.",
+          "enum": [
+            "deterministic",
+            "stochastic"
+          ]
+        },
+        "stochastic": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "repetitions",
+            "min_pass_rate"
+          ],
+          "properties": {
+            "repetitions": {
+              "type": "integer",
+              "minimum": 2
+            },
+            "min_pass_rate": {
+              "type": "number",
+              "exclusiveMinimum": 0,
+              "maximum": 1
+            }
+          }
+        },
+        "preconditions": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "steps": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "$ref": "#/definitions/step"
+          }
+        },
+        "assertions": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "$ref": "#/definitions/assertion"
+          }
+        },
+        "tags": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "sut_config": {
+          "description": "Configuration the SUT must run with for this test to be valid. Only applicable to environment 'local'; the deployed service runs fixed configuration.",
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "env"
+          ],
+          "properties": {
+            "env": {
+              "type": "object",
+              "minProperties": 1,
+              "additionalProperties": {
+                "type": "string"
+              }
+            },
+            "rationale": {
+              "type": "string",
+              "minLength": 10
+            }
+          }
+        }
+      },
+      "if": {
+        "properties": {
+          "determinism": {
+            "const": "stochastic"
+          }
+        }
+      },
+      "then": {
+        "required": [
+          "stochastic"
+        ]
+      }
+    },
+    "step": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "description"
+      ],
+      "properties": {
+        "kind": {
+          "enum": [
+            "request",
+            "wait",
+            "scrape_metrics"
+          ]
+        },
+        "description": {
+          "type": "string",
+          "minLength": 1
+        },
+        "request": {
+          "$ref": "#/definitions/request"
+        },
+        "wait_s": {
+          "type": "number",
+          "exclusiveMinimum": 0
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "kind": {
+                "const": "request"
+              }
+            }
+          },
+          "then": {
+            "required": [
+              "request"
+            ]
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "kind": {
+                "const": "wait"
+              }
+            }
+          },
+          "then": {
+            "required": [
+              "wait_s"
+            ]
+          }
+        }
+      ]
+    },
+    "request": {
+      "description": "Declarative traffic shape. count + concurrency + rate_per_s cover single calls, bursts and paced sends; codegen turns this into requests/httpx or k6.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "method",
+        "path"
+      ],
+      "properties": {
+        "method": {
+          "enum": [
+            "GET",
+            "POST",
+            "PUT",
+            "PATCH",
+            "DELETE"
+          ]
+        },
+        "path": {
+          "type": "string",
+          "pattern": "^/"
+        },
+        "headers": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          }
+        },
+        "count": {
+          "type": "integer",
+          "minimum": 1,
+          "default": 1
+        },
+        "concurrency": {
+          "type": "integer",
+          "minimum": 1,
+          "default": 1
+        },
+        "rate_per_s": {
+          "type": "number",
+          "exclusiveMinimum": 0
+        },
+        "distinct_clients": {
+          "description": "Spread requests across N client identities (distinct Fly-Client-IP values).",
+          "type": "integer",
+          "minimum": 1
+        },
+        "new_connection_per_request": {
+          "type": "boolean",
+          "default": false
+        }
+      }
+    },
+    "assertion": {
+      "description": "Structured so codegen is mechanical and so a later fix-suggestion step can be checked for weakened assertions.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "subject",
+        "operator",
+        "expected",
+        "description"
+      ],
+      "properties": {
+        "subject": {
+          "description": "status | body | header:<Name> | count | ratio | latency_p50_ms | latency_p95_ms | latency_p99_ms | metric_delta:<series> | metric_present:<name>. status/body/header apply to the last response of the preceding request step; count/ratio/latency apply to all responses of that step.",
+          "type": "string",
+          "pattern": "^(status|body|count|ratio|latency_p(50|95|99)_ms|header:[A-Za-z0-9-]+|metric_delta:.+|metric_present:[a-z_]+)$"
+        },
+        "operator": {
+          "enum": [
+            "eq",
+            "ne",
+            "lt",
+            "lte",
+            "gt",
+            "gte",
+            "contains",
+            "between",
+            "not_contains"
+          ]
+        },
+        "expected": {},
+        "filter": {
+          "description": "For count/ratio: which responses to count. 503 needs body_contains to tell shed from breaker_open.",
+          "type": "object",
+          "additionalProperties": false,
+          "minProperties": 1,
+          "properties": {
+            "status": {
+              "type": "integer",
+              "minimum": 100,
+              "maximum": 599
+            },
+            "body_contains": {
+              "type": "string"
+            }
+          }
+        },
+        "scope": {
+          "description": "Restrict to a slice of the step's responses, in send order: [from, to).",
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "from",
+            "to"
+          ],
+          "properties": {
+            "from": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "to": {
+              "type": "integer",
+              "minimum": 1
+            }
+          }
+        },
+        "description": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "operator": {
+                "const": "between"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "expected": {
+                "type": "array",
+                "minItems": 2,
+                "maxItems": 2,
+                "items": {
+                  "type": "number"
+                }
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "subject": {
+                "enum": [
+                  "count",
+                  "ratio"
+                ]
+              }
+            }
+          },
+          "then": {
+            "required": [
+              "filter"
+            ]
+          }
+        }
+      ]
+    },
+    "open_question": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "question",
+        "impact"
+      ],
+      "properties": {
+        "id": {
+          "type": "string",
+          "pattern": "^Q-[0-9]{3}$"
+        },
+        "question": {
+          "type": "string",
+          "minLength": 10
+        },
+        "requirement_ids": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/requirement_id"
+          }
+        },
+        "impact": {
+          "enum": [
+            "blocks_testing",
+            "affects_expected_result",
+            "security",
+            "informational"
+          ]
+        }
+      }
+    }
+  }
+}

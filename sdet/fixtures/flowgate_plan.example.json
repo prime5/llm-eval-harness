@@ -1,0 +1,843 @@
+{
+  "schema_version": "0.2",
+  "plan_id": "flowgate-v1-golden",
+  "prd": {
+    "path": "sdet/fixtures/flowgate_prd.md",
+    "sha256": "1dd5512ad78babab793632f8a53517d55bde8fd625883813b5ad9987ce7352c2"
+  },
+  "sut": {
+    "name": "flowgate",
+    "base_urls": {
+      "live": "https://flowgate-pramathesh.fly.dev",
+      "local": "http://localhost:8080"
+    }
+  },
+  "generator": {
+    "kind": "human",
+    "generated_at": "2026-09-21T00:00:00-07:00"
+  },
+  "requirements": [
+    {
+      "id": "REQ-HLT-001",
+      "source_quote": "GET /healthz returns 200 with body \"ok\".",
+      "summary": "Health endpoint returns 200 ok",
+      "kind": "functional",
+      "testable": true
+    },
+    {
+      "id": "REQ-ORD-001",
+      "source_quote": "Requests to /work pass through the checks in this order: load shedding, then rate limiting, then the circuit breaker, then the backend.",
+      "summary": "Protection chain order is shed, rate-limit, breaker, backend",
+      "kind": "functional",
+      "testable": false,
+      "untestable_reason": "Order is only observable black-box when two checks would reject the same request at the same moment; not reliably reproducible against a live service. Belongs in an in-process middleware test."
+    },
+    {
+      "id": "REQ-SHD-001",
+      "source_quote": "When 50 requests are already in flight, additional requests are rejected immediately with 503 and body \"server overloaded, try again shortly\".",
+      "summary": "Over 50 in-flight requests are shed with 503 and a specific body",
+      "kind": "functional",
+      "testable": true
+    },
+    {
+      "id": "REQ-SHD-002",
+      "source_quote": "Requests are never queued.",
+      "summary": "Shed requests are rejected without waiting",
+      "kind": "nonfunctional",
+      "testable": true
+    },
+    {
+      "id": "REQ-RL-001",
+      "source_quote": "Each client is limited to 5 requests per second sustained, with a burst of 20.",
+      "summary": "Token bucket: 5 req/s sustained, burst 20, per client",
+      "kind": "functional",
+      "testable": true
+    },
+    {
+      "id": "REQ-RL-002",
+      "source_quote": "A client is identified by the Fly-Client-IP header when present, otherwise by the IP address of the connection, ignoring the port.",
+      "summary": "Client identity is Fly-Client-IP, else connection IP without port",
+      "kind": "functional",
+      "testable": true
+    },
+    {
+      "id": "REQ-RL-003",
+      "source_quote": "Over-limit requests are rejected with 429, body \"rate limit exceeded\", and a Retry-After header of at least 1 second.",
+      "summary": "429 response shape: body text and Retry-After >= 1",
+      "kind": "functional",
+      "testable": true
+    },
+    {
+      "id": "REQ-CB-001",
+      "source_quote": "After 5 backend failures the breaker opens.",
+      "summary": "Breaker opens after 5 backend failures",
+      "kind": "functional",
+      "testable": true
+    },
+    {
+      "id": "REQ-CB-002",
+      "source_quote": "While open, requests are rejected with 503 and body \"backend unavailable\".",
+      "summary": "Open breaker rejects with 503 backend unavailable",
+      "kind": "functional",
+      "testable": true
+    },
+    {
+      "id": "REQ-CB-003",
+      "source_quote": "After a 10 second cooldown the breaker allows a trial request; success closes it, failure reopens it.",
+      "summary": "Half-open trial after 10s cooldown",
+      "kind": "functional",
+      "testable": true
+    },
+    {
+      "id": "REQ-BE-001",
+      "source_quote": "About 2% of requests fail with 500.",
+      "summary": "Simulated backend error rate about 2%",
+      "kind": "nonfunctional",
+      "testable": true
+    },
+    {
+      "id": "REQ-MET-001",
+      "source_quote": "/metrics reports flowgate_requests_total with an outcome label (allowed, error, shed, rate_limited, breaker_open), flowgate_breaker_state, and flowgate_in_flight_requests.",
+      "summary": "Metrics endpoint exposes the three named series",
+      "kind": "functional",
+      "testable": true
+    },
+    {
+      "id": "REQ-SLO-001",
+      "source_quote": "p95 latency of /work at or below 150 ms under about 2,000 requests per second sustained.",
+      "summary": "p95 <= 150ms at ~2,000 req/s",
+      "kind": "slo",
+      "testable": true
+    },
+    {
+      "id": "REQ-SLO-002",
+      "source_quote": "Backend success rate of at least 95% for admitted requests.",
+      "summary": "Admitted-request success rate >= 95%",
+      "kind": "slo",
+      "testable": true
+    }
+  ],
+  "test_cases": [
+    {
+      "id": "TC-001",
+      "title": "Health endpoint returns 200 ok",
+      "requirement_ids": [
+        "REQ-HLT-001"
+      ],
+      "category": "functional",
+      "priority": "P1",
+      "environment": "any",
+      "determinism": "deterministic",
+      "steps": [
+        {
+          "kind": "request",
+          "description": "Call /healthz once",
+          "request": {
+            "method": "GET",
+            "path": "/healthz"
+          }
+        }
+      ],
+      "assertions": [
+        {
+          "subject": "status",
+          "operator": "eq",
+          "expected": 200,
+          "description": "Healthy service returns 200"
+        },
+        {
+          "subject": "body",
+          "operator": "contains",
+          "expected": "ok",
+          "description": "Body is ok"
+        }
+      ],
+      "tags": [
+        "smoke"
+      ]
+    },
+    {
+      "id": "TC-002",
+      "title": "Burst of 20 is admitted, requests beyond it are rate limited",
+      "requirement_ids": [
+        "REQ-RL-001"
+      ],
+      "category": "boundary",
+      "priority": "P0",
+      "environment": "any",
+      "determinism": "deterministic",
+      "preconditions": [
+        "Exactly one gateway instance is serving this client (see Q-003)",
+        "This client has sent no requests for at least 5 seconds, so its bucket is full"
+      ],
+      "steps": [
+        {
+          "kind": "request",
+          "description": "Send 30 requests to /work at once from one client",
+          "request": {
+            "method": "GET",
+            "path": "/work",
+            "count": 30,
+            "concurrency": 30
+          }
+        }
+      ],
+      "assertions": [
+        {
+          "subject": "count",
+          "operator": "gte",
+          "expected": 1,
+          "filter": {
+            "status": 429
+          },
+          "description": "At least one request beyond the burst is rejected"
+        },
+        {
+          "subject": "count",
+          "operator": "lte",
+          "expected": 10,
+          "filter": {
+            "status": 429
+          },
+          "description": "No more than the 10 over-burst requests are rejected (refill during the send can only admit more)"
+        }
+      ],
+      "tags": [
+        "rate-limit"
+      ]
+    },
+    {
+      "id": "TC-003",
+      "title": "429 response carries the documented body and Retry-After",
+      "requirement_ids": [
+        "REQ-RL-003"
+      ],
+      "category": "negative",
+      "priority": "P1",
+      "environment": "any",
+      "determinism": "deterministic",
+      "preconditions": [
+        "Exactly one gateway instance is serving this client (see Q-003)"
+      ],
+      "steps": [
+        {
+          "kind": "request",
+          "description": "Drain the bucket with 25 concurrent requests",
+          "request": {
+            "method": "GET",
+            "path": "/work",
+            "count": 25,
+            "concurrency": 25
+          }
+        },
+        {
+          "kind": "request",
+          "description": "Immediately send one more request, which must be over limit",
+          "request": {
+            "method": "GET",
+            "path": "/work"
+          }
+        }
+      ],
+      "assertions": [
+        {
+          "subject": "status",
+          "operator": "eq",
+          "expected": 429,
+          "description": "Over-limit request is rejected"
+        },
+        {
+          "subject": "body",
+          "operator": "contains",
+          "expected": "rate limit exceeded",
+          "description": "Documented body text"
+        },
+        {
+          "subject": "header:Retry-After",
+          "operator": "gte",
+          "expected": 1,
+          "description": "Retry-After is at least 1 second"
+        }
+      ],
+      "tags": [
+        "rate-limit"
+      ]
+    },
+    {
+      "id": "TC-004",
+      "title": "Sustained traffic under 5 req/s is never limited",
+      "requirement_ids": [
+        "REQ-RL-001"
+      ],
+      "category": "boundary",
+      "priority": "P1",
+      "environment": "any",
+      "determinism": "deterministic",
+      "preconditions": [
+        "Exactly one gateway instance is serving this client (see Q-003)"
+      ],
+      "steps": [
+        {
+          "kind": "request",
+          "description": "Send 40 requests paced at 4 per second",
+          "request": {
+            "method": "GET",
+            "path": "/work",
+            "count": 40,
+            "rate_per_s": 4
+          }
+        }
+      ],
+      "assertions": [
+        {
+          "subject": "count",
+          "operator": "eq",
+          "expected": 0,
+          "filter": {
+            "status": 429
+          },
+          "description": "Below the sustained rate, nothing is limited"
+        }
+      ],
+      "tags": [
+        "rate-limit"
+      ]
+    },
+    {
+      "id": "TC-005",
+      "title": "Regression: separate connections from one IP share one bucket",
+      "requirement_ids": [
+        "REQ-RL-002",
+        "REQ-RL-001"
+      ],
+      "category": "regression",
+      "priority": "P0",
+      "environment": "local",
+      "determinism": "deterministic",
+      "preconditions": [
+        "Local instance, no Fly-Client-IP header, so identity falls back to the connection address",
+        "This client's bucket is full"
+      ],
+      "steps": [
+        {
+          "kind": "request",
+          "description": "Send 30 requests, each on a new TCP connection (new source port)",
+          "request": {
+            "method": "GET",
+            "path": "/work",
+            "count": 30,
+            "concurrency": 30,
+            "new_connection_per_request": true
+          }
+        }
+      ],
+      "assertions": [
+        {
+          "subject": "count",
+          "operator": "gte",
+          "expected": 1,
+          "filter": {
+            "status": 429
+          },
+          "description": "Port changes must not create new clients; this is the 2026-09-11 postmortem defect"
+        }
+      ],
+      "tags": [
+        "rate-limit",
+        "postmortem"
+      ]
+    },
+    {
+      "id": "TC-006",
+      "title": "Distinct Fly-Client-IP values get independent buckets",
+      "requirement_ids": [
+        "REQ-RL-002"
+      ],
+      "category": "functional",
+      "priority": "P1",
+      "environment": "local",
+      "determinism": "deterministic",
+      "preconditions": [
+        "Local instance: Fly's edge overwrites Fly-Client-IP on the live service"
+      ],
+      "steps": [
+        {
+          "kind": "request",
+          "description": "Send 40 requests at once spread across 2 client identities (20 each)",
+          "request": {
+            "method": "GET",
+            "path": "/work",
+            "count": 40,
+            "concurrency": 40,
+            "distinct_clients": 2
+          }
+        }
+      ],
+      "assertions": [
+        {
+          "subject": "count",
+          "operator": "eq",
+          "expected": 0,
+          "filter": {
+            "status": 429
+          },
+          "description": "Each identity stays within its own burst of 20"
+        }
+      ],
+      "tags": [
+        "rate-limit"
+      ],
+      "sut_config": {
+        "env": {
+          "RL_BURST": "20",
+          "RL_RATE": "5"
+        },
+        "rationale": "Default limits; the test depends on the documented burst of 20 per client."
+      }
+    },
+    {
+      "id": "TC-007",
+      "title": "Over 50 in-flight requests are shed with the load-shedding body",
+      "requirement_ids": [
+        "REQ-SHD-001"
+      ],
+      "category": "resilience",
+      "priority": "P0",
+      "environment": "local",
+      "determinism": "deterministic",
+      "preconditions": [
+        "Local instance started with this test's sut_config"
+      ],
+      "steps": [
+        {
+          "kind": "request",
+          "description": "Send 20 concurrent requests to /work",
+          "request": {
+            "method": "GET",
+            "path": "/work",
+            "count": 20,
+            "concurrency": 20
+          }
+        }
+      ],
+      "assertions": [
+        {
+          "subject": "count",
+          "operator": "gte",
+          "expected": 1,
+          "filter": {
+            "status": 503,
+            "body_contains": "server overloaded"
+          },
+          "description": "Shedding engages; body distinguishes it from breaker_open, which is also 503"
+        },
+        {
+          "subject": "count",
+          "operator": "eq",
+          "expected": 0,
+          "filter": {
+            "status": 429
+          },
+          "description": "Rate limiter is not what rejected these"
+        }
+      ],
+      "tags": [
+        "shedding"
+      ],
+      "sut_config": {
+        "env": {
+          "MAX_IN_FLIGHT": "2",
+          "RL_BURST": "1000",
+          "RL_RATE": "1000"
+        },
+        "rationale": "Shedding at 2 in-flight is reachable with 20 concurrent requests; the raised limiter keeps the rate limiter from rejecting first."
+      }
+    },
+    {
+      "id": "TC-008",
+      "title": "Shed requests are rejected without queueing",
+      "requirement_ids": [
+        "REQ-SHD-002"
+      ],
+      "category": "resilience",
+      "priority": "P1",
+      "environment": "local",
+      "determinism": "stochastic",
+      "stochastic": {
+        "repetitions": 3,
+        "min_pass_rate": 0.67
+      },
+      "preconditions": [
+        "Local instance started with this test's sut_config"
+      ],
+      "steps": [
+        {
+          "kind": "request",
+          "description": "Send 20 concurrent requests to /work",
+          "request": {
+            "method": "GET",
+            "path": "/work",
+            "count": 20,
+            "concurrency": 20
+          }
+        }
+      ],
+      "assertions": [
+        {
+          "subject": "latency_p95_ms",
+          "operator": "lt",
+          "expected": 5,
+          "filter": {
+            "status": 503,
+            "body_contains": "server overloaded"
+          },
+          "description": "Shed responses return faster than the 5ms backend minimum, so they never waited"
+        }
+      ],
+      "tags": [
+        "shedding"
+      ],
+      "sut_config": {
+        "env": {
+          "MAX_IN_FLIGHT": "2",
+          "RL_BURST": "1000",
+          "RL_RATE": "1000"
+        },
+        "rationale": "Shedding at 2 in-flight is reachable with 20 concurrent requests; the raised limiter keeps the rate limiter from rejecting first."
+      }
+    },
+    {
+      "id": "TC-009",
+      "title": "Simulated backend error rate is about 2%",
+      "requirement_ids": [
+        "REQ-BE-001",
+        "REQ-SLO-002"
+      ],
+      "category": "functional",
+      "priority": "P2",
+      "environment": "any",
+      "determinism": "stochastic",
+      "stochastic": {
+        "repetitions": 3,
+        "min_pass_rate": 0.67
+      },
+      "preconditions": [
+        "Paced under the rate limit so every request is admitted"
+      ],
+      "steps": [
+        {
+          "kind": "request",
+          "description": "Send 300 requests paced at 4 per second",
+          "request": {
+            "method": "GET",
+            "path": "/work",
+            "count": 300,
+            "rate_per_s": 4
+          }
+        }
+      ],
+      "assertions": [
+        {
+          "subject": "ratio",
+          "operator": "between",
+          "expected": [
+            0.0,
+            0.05
+          ],
+          "filter": {
+            "status": 500
+          },
+          "description": "Error ratio consistent with about 2%, and within the 95% success SLO"
+        }
+      ],
+      "tags": [
+        "flaky-by-design"
+      ]
+    },
+    {
+      "id": "TC-010",
+      "title": "Metrics expose all documented series and count rate-limited requests",
+      "requirement_ids": [
+        "REQ-MET-001"
+      ],
+      "category": "observability",
+      "priority": "P1",
+      "environment": "any",
+      "determinism": "deterministic",
+      "preconditions": [
+        "Exactly one gateway instance (metrics are per instance, see Q-003)"
+      ],
+      "steps": [
+        {
+          "kind": "scrape_metrics",
+          "description": "Scrape /metrics as the baseline"
+        },
+        {
+          "kind": "request",
+          "description": "Trigger rate limiting with 30 concurrent requests",
+          "request": {
+            "method": "GET",
+            "path": "/work",
+            "count": 30,
+            "concurrency": 30
+          }
+        },
+        {
+          "kind": "scrape_metrics",
+          "description": "Scrape /metrics again"
+        }
+      ],
+      "assertions": [
+        {
+          "subject": "metric_present:flowgate_requests_total",
+          "operator": "eq",
+          "expected": true,
+          "description": "Request counter is exposed"
+        },
+        {
+          "subject": "metric_present:flowgate_breaker_state",
+          "operator": "eq",
+          "expected": true,
+          "description": "Breaker state gauge is exposed"
+        },
+        {
+          "subject": "metric_present:flowgate_in_flight_requests",
+          "operator": "eq",
+          "expected": true,
+          "description": "In-flight gauge is exposed"
+        },
+        {
+          "subject": "metric_delta:flowgate_requests_total{outcome=\"rate_limited\"}",
+          "operator": "gte",
+          "expected": 1,
+          "description": "Rate-limited outcome is counted"
+        }
+      ],
+      "tags": [
+        "metrics"
+      ]
+    },
+    {
+      "id": "TC-011",
+      "title": "p95 latency SLO under ~2,000 req/s",
+      "requirement_ids": [
+        "REQ-SLO-001",
+        "REQ-SLO-002"
+      ],
+      "category": "performance",
+      "priority": "P1",
+      "environment": "live",
+      "determinism": "stochastic",
+      "stochastic": {
+        "repetitions": 2,
+        "min_pass_rate": 1.0
+      },
+      "preconditions": [
+        "Load generated from many client identities; one source IP is capped at 5 req/s (see Q-004)"
+      ],
+      "steps": [
+        {
+          "kind": "request",
+          "description": "Sustain about 2,000 req/s for 2 minutes",
+          "request": {
+            "method": "GET",
+            "path": "/work",
+            "count": 240000,
+            "concurrency": 300,
+            "rate_per_s": 2000,
+            "distinct_clients": 1000
+          }
+        }
+      ],
+      "assertions": [
+        {
+          "subject": "latency_p95_ms",
+          "operator": "lte",
+          "expected": 150,
+          "description": "p95 at or below 150 ms"
+        },
+        {
+          "subject": "ratio",
+          "operator": "lte",
+          "expected": 0.05,
+          "filter": {
+            "status": 500
+          },
+          "description": "Admitted-request error rate within the 95% success SLO"
+        }
+      ],
+      "tags": [
+        "slo",
+        "load"
+      ]
+    },
+    {
+      "id": "TC-012",
+      "title": "Breaker opens after the configured number of backend failures",
+      "requirement_ids": [
+        "REQ-CB-001",
+        "REQ-CB-002"
+      ],
+      "category": "resilience",
+      "priority": "P0",
+      "environment": "local",
+      "determinism": "stochastic",
+      "stochastic": {
+        "repetitions": 2,
+        "min_pass_rate": 1.0
+      },
+      "sut_config": {
+        "env": {
+          "BREAKER_THRESHOLD": "1",
+          "RL_BURST": "1000",
+          "RL_RATE": "1000"
+        },
+        "rationale": "The 2% simulated error rate cannot be driven on demand; a threshold of 1 makes the first failure open the breaker, which 300 requests will produce."
+      },
+      "preconditions": [
+        "Local instance started with this test's sut_config"
+      ],
+      "steps": [
+        {
+          "kind": "request",
+          "description": "Send 300 requests paced at 20 per second until a backend failure occurs",
+          "request": {
+            "method": "GET",
+            "path": "/work",
+            "count": 300,
+            "rate_per_s": 20
+          }
+        }
+      ],
+      "assertions": [
+        {
+          "subject": "count",
+          "operator": "gte",
+          "expected": 1,
+          "filter": {
+            "status": 500
+          },
+          "description": "At least one backend failure occurred, which is what opens the breaker"
+        },
+        {
+          "subject": "count",
+          "operator": "gte",
+          "expected": 1,
+          "filter": {
+            "status": 503,
+            "body_contains": "backend unavailable"
+          },
+          "description": "Breaker rejects with 503 and the documented body; the body separates this from load shedding, which is also 503"
+        }
+      ],
+      "tags": [
+        "breaker"
+      ]
+    },
+    {
+      "id": "TC-013",
+      "title": "Breaker allows a trial request after the cooldown",
+      "requirement_ids": [
+        "REQ-CB-003"
+      ],
+      "category": "resilience",
+      "priority": "P1",
+      "environment": "local",
+      "determinism": "stochastic",
+      "stochastic": {
+        "repetitions": 2,
+        "min_pass_rate": 1.0
+      },
+      "sut_config": {
+        "env": {
+          "BREAKER_THRESHOLD": "1",
+          "RL_BURST": "1000",
+          "RL_RATE": "1000"
+        },
+        "rationale": "Same as TC-012: the breaker has to be opened before the cooldown can be observed."
+      },
+      "preconditions": [
+        "Local instance started with this test's sut_config",
+        "Breaker has been driven open, as in TC-012"
+      ],
+      "steps": [
+        {
+          "kind": "request",
+          "description": "Send requests until the breaker rejects one",
+          "request": {
+            "method": "GET",
+            "path": "/work",
+            "count": 300,
+            "rate_per_s": 20
+          }
+        },
+        {
+          "kind": "wait",
+          "description": "Wait out the 10 second cooldown",
+          "wait_s": 11
+        },
+        {
+          "kind": "request",
+          "description": "Send one trial request",
+          "request": {
+            "method": "GET",
+            "path": "/work"
+          }
+        }
+      ],
+      "assertions": [
+        {
+          "subject": "body",
+          "operator": "not_contains",
+          "expected": "backend unavailable",
+          "description": "After the cooldown the breaker is half-open, so the trial request reaches the backend rather than being rejected"
+        }
+      ],
+      "tags": [
+        "breaker"
+      ]
+    }
+  ],
+  "open_questions": [
+    {
+      "id": "Q-001",
+      "question": "Does \"after 5 backend failures\" mean 5 consecutive failures or 5 within a time window? BREAKER_THRESHOLD makes the breaker drivable, but the PRD does not say which counting rule it uses, so a test at the documented threshold of 5 cannot assert the boundary.",
+      "requirement_ids": [
+        "REQ-CB-001",
+        "REQ-CB-002",
+        "REQ-CB-003"
+      ],
+      "impact": "affects_expected_result"
+    },
+    {
+      "id": "Q-002",
+      "question": "Fly-Client-IP is trusted from any caller. Off Fly's edge, a client can rotate that header to bypass rate limiting. Is the gateway guaranteed to only ever run behind Fly's edge?",
+      "requirement_ids": [
+        "REQ-RL-002"
+      ],
+      "impact": "security"
+    },
+    {
+      "id": "Q-003",
+      "question": "The live deployment runs more than one instance with per-instance state. Should rate-limit and metrics tests run against a single pinned instance?",
+      "requirement_ids": [
+        "REQ-RL-001",
+        "REQ-MET-001"
+      ],
+      "impact": "affects_expected_result"
+    },
+    {
+      "id": "Q-004",
+      "question": "The 2026-09-11 SLO numbers were measured while every connection counted as a new client. With per-IP limiting fixed, how will load be generated from enough client identities to reproduce ~2,000 req/s?",
+      "requirement_ids": [
+        "REQ-SLO-001",
+        "REQ-SLO-002"
+      ],
+      "impact": "blocks_testing"
+    }
+  ],
+  "out_of_scope": [
+    "Fly.io deployment configuration and CI workflow",
+    "Aggregating metrics across instances"
+  ]
+}
