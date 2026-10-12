@@ -12,8 +12,8 @@ Usage:
     # Tighter threshold (flag changes > 5 points)
     python detect_drift.py --threshold 0.05
 
-    # Post to Slack on regression
-    python detect_drift.py --slack-webhook https://hooks.slack.com/services/...
+    # Post to Slack on regression (webhook from the environment)
+    SLACK_WEBHOOK_URL=... python detect_drift.py
 
     # Exit code 1 if regressions found (for CI gate)
     python detect_drift.py --fail-on-regression
@@ -29,6 +29,7 @@ from pathlib import Path
 from colorama import Fore, Style, init as colorama_init
 
 from evals.drift_detector import DriftDetector
+from reporters import slack
 
 colorama_init()
 
@@ -42,7 +43,9 @@ def parse_args():
     p.add_argument("--threshold", type=float, default=0.1,
                    help="Min absolute score delta to flag as drop/gain (default: 0.1)")
     p.add_argument("--slack-webhook", metavar="URL",
-                   help="Slack incoming webhook URL — posts alert if regressions found")
+                   help="Slack incoming webhook URL — posts alert if regressions found. "
+                        "Prefer the SLACK_WEBHOOK_URL environment variable: a URL on the "
+                        "command line lands in shell history and CI logs.")
     p.add_argument("--fail-on-regression", action="store_true",
                    help="Exit code 1 if any regressions detected (for CI gate)")
     p.add_argument("--output", metavar="PATH",
@@ -50,33 +53,13 @@ def parse_args():
     return p.parse_args()
 
 
-def post_slack(webhook_url: str, report) -> None:
-    """Post a regression alert to Slack via incoming webhook."""
-    import urllib.request
-
-    reg_lines = "\n".join(f"• `{c.case_id}`: {c.description[:60]}" for c in report.regressions)
-    text = (
-        f":rotating_light: *LLM Eval Regression Detected*\n"
-        f"Provider: `{report.provider}`\n"
-        f"Baseline: `{report.baseline_timestamp}`\n"
-        f"Current:  `{report.current_timestamp}`\n\n"
-        f"*{len(report.regressions)} regression(s):*\n{reg_lines}"
-    )
-    payload = json.dumps({"text": text}).encode()
-    req = urllib.request.Request(
-        webhook_url,
-        data=payload,
-        headers={"Content-Type": "application/json"},
-        method="POST",
-    )
-    try:
-        with urllib.request.urlopen(req, timeout=10) as resp:
-            if resp.status != 200:
-                print(f"{Fore.YELLOW}⚠ Slack webhook returned HTTP {resp.status}{Style.RESET_ALL}")
-            else:
-                print(f"{Fore.GREEN}✓ Slack alert posted.{Style.RESET_ALL}")
-    except Exception as exc:
-        print(f"{Fore.RED}✗ Slack webhook failed: {exc}{Style.RESET_ALL}")
+def post_slack(webhook_url, report) -> None:
+    """Post a regression alert to Slack (webhook from the flag or SLACK_WEBHOOK_URL)."""
+    result = slack.post(slack.format_drift_alert(report), webhook_url)
+    if result.ok:
+        print(f"{Fore.GREEN}✓ Slack alert posted.{Style.RESET_ALL}")
+    else:
+        print(f"{Fore.RED}✗ Slack alert not posted: {result.error}{Style.RESET_ALL}")
 
 
 def main():
@@ -103,7 +86,7 @@ def main():
         Path(args.output).write_text(json.dumps(report.to_dict(), indent=2))
         print(f"📊 Drift report written: {args.output}")
 
-    if report.regressions and args.slack_webhook:
+    if report.regressions and slack.resolve_webhook(args.slack_webhook):
         post_slack(args.slack_webhook, report)
 
     if args.fail_on_regression and report.has_regressions:

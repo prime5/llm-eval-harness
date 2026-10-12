@@ -28,6 +28,7 @@ This harness treats those challenges as first-class engineering problems, not af
 | **3 — Multi-Agent Workflow Testing** | Tool call validation, multi-turn conversation testing, AgentRunner | ✅ Done |
 | **4 — Observability & CI/CD Pipeline** | GitHub Actions, score drift detection, Streamlit dashboard, Slack alerts | ✅ Done |
 | **5 — RAG Evaluation** | ChromaDB ingestion, retrieval precision, answer faithfulness, adversarial retrieval | ✅ Done |
+| **6 — Containerized Runner** | Docker-isolated suite execution, parallel containers, K8s Job manifest, aggregated CI reporting | ✅ Done |
 
 ---
 
@@ -75,6 +76,74 @@ python3 -m phase5.eval_suite --verbose            # run full eval suite
 python3 phase5/rag_drift.py --fail-on-regression  # check drift vs baseline
 streamlit run dashboard.py                        # view results in Phase 5 tab
 ```
+
+---
+
+## Phase 6: Containerized Test Runner
+
+Each eval suite runs in an isolated Docker container. Suites execute in parallel; results are aggregated into a combined JSON report. The same isolation model maps directly to Kubernetes Jobs for cluster-scale dispatch.
+
+### Why containers?
+
+| Problem | Container solution |
+|---|---|
+| Env drift ("works on my machine") | Identical Python + deps on every run |
+| Suite crashes poisoning others | Each suite in its own container — failures are isolated |
+| Serial execution bottleneck | All containers launch in parallel (ThreadPoolExecutor) |
+| CI / cluster parity | Same Docker image runs locally, in GitHub Actions, and in K8s |
+
+### Architecture
+
+```
+phase6/
+├── container_runner.py   # Docker SDK orchestrator — one container per suite
+├── k8s_job.yaml          # Kubernetes Job manifest (parameterized via EVAL_SUITE env)
+└── __init__.py
+
+Dockerfile                # Two-stage build: builder layer + slim runtime
+.dockerignore             # Excludes .git, .env, __pycache__, chroma_db
+```
+
+### How it works
+
+1. `ensure_image()` — builds `eval-harness:phase6` from `Dockerfile` if not already present
+2. `run_parallel(suites)` — dispatches one `docker run --rm` per suite using `ThreadPoolExecutor`
+3. Each container receives `OPENAI_API_KEY` via env, runs `run_evals.py --format json`, emits results to stdout
+4. Results are parsed from stdout and aggregated into `phase6_results.json`
+5. CI gate: exit 1 if overall pass rate < `--min-pass-rate` or any container failed
+
+### Quickstart
+
+```bash
+# Build the image
+docker build -t eval-harness:phase6 .
+
+# Run 3 core suites in parallel containers
+export OPENAI_API_KEY=sk-...
+python -m phase6.container_runner
+
+# Run all 9 suites
+python -m phase6.container_runner --all
+
+# Run specific suites, require 80% pass rate
+python -m phase6.container_runner \
+  --suites test_cases/basic_qa.yaml test_cases/hallucination.yaml \
+  --min-pass-rate 0.8
+
+# K8s: deploy a Job for one suite
+SUITE=test_cases/basic_qa.yaml
+SUITE_SLUG=$(echo $SUITE | tr '/' '-' | tr '.' '-')
+sed "s|__SUITE__|$SUITE|g; s|__SUITE_SLUG__|$SUITE_SLUG|g" \
+  phase6/k8s_job.yaml | kubectl apply -f -
+```
+
+### CI integration
+
+Phase 6 adds a fourth GitHub Actions job (`containerized-eval`) that:
+1. Builds the Docker image on `ubuntu-latest` (Docker pre-installed)
+2. Runs core suites via `python -m phase6.container_runner`
+3. Uploads `phase6_results.json` as an artifact
+4. Fails the build if pass rate < 80% or any container errors
 
 ---
 
@@ -353,7 +422,7 @@ Then register it in `providers/__init__.py`.
 - GitHub Actions: two-job workflow (`offline-tests` always, `eval-ci` on main/when key available)
 - Score drift detection: `detect_drift.py` compares baseline vs current, classifies regressions/improvements/score drops
 - Streamlit dashboard: `streamlit run dashboard.py` — summary metrics, tag breakdown, score/latency charts, drift comparison
-- Slack alerts: `detect_drift.py --slack-webhook URL` posts regression summary to Slack
+- Slack alerts: `detect_drift.py` posts a regression summary when `SLACK_WEBHOOK_URL` is set (the `--slack-webhook` flag still works, but a URL on the command line lands in shell history)
 - `--save-baseline` / `--check-drift` flags on `run_evals.py` for inline workflow integration
 
 ---
@@ -379,7 +448,7 @@ python3 detect_drift.py \
   --fail-on-regression
 
 # Post Slack alert on regression
-python3 detect_drift.py --slack-webhook https://hooks.slack.com/services/...
+SLACK_WEBHOOK_URL=https://hooks.slack.com/services/... python3 detect_drift.py
 ```
 
 Change types detected per case:
