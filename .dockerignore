@@ -1,0 +1,11 @@
+.git
+.env
+__pycache__
+*.pyc
+*.pyo
+.pytest_cache
+eval_report.html
+eval_results.json
+eval_baseline.json
+phase5/data/chroma_db
+.DS_Store

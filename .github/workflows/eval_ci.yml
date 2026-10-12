@@ -184,3 +184,57 @@ jobs:
             phase5/data/rag_eval_results.json
             phase5/data/rag_drift.json
           retention-days: 30
+
+  # ------------------------------------------------------------------ #
+  # Job 4: Phase 6 — Containerized eval runner                         #
+  # Builds the harness Docker image, runs each suite in an isolated    #
+  # container, and aggregates results. Demonstrates the same isolation #
+  # model as K8s Job-based test dispatch (one container per suite,     #
+  # parallel execution, JSON results collected from stdout).           #
+  # Opt-in via RUN_LIVE_EVALS; requires OPENAI_API_KEY secret.        #
+  # ------------------------------------------------------------------ #
+  containerized-eval:
+    name: Containerized Eval (Phase 6)
+    runs-on: ubuntu-latest
+    needs: offline-tests
+    if: ${{ vars.RUN_LIVE_EVALS == 'true' }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install dependencies (including docker SDK)
+        run: pip install -r requirements.txt
+
+      # Docker is pre-installed on ubuntu-latest GitHub runners.
+      # Build the harness image from our Dockerfile.
+      - name: Build eval-harness Docker image
+        run: docker build -t eval-harness:phase6 .
+
+      # Run the 3 core suites, each in its own container, in parallel.
+      # --no-build-check skips the Python-SDK build step (we just built above).
+      - name: Run containerized eval suites
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+        run: |
+          python -m phase6.container_runner \
+            --suites test_cases/basic_qa.yaml \
+                     test_cases/instruction_following.yaml \
+                     test_cases/complex_explanations.yaml \
+            --no-build-check \
+            --min-pass-rate 0.8 \
+            --output phase6_results.json
+
+      - name: Upload Phase 6 results
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: phase6-results-${{ github.run_number }}
+          path: phase6_results.json
+          retention-days: 30

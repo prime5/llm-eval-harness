@@ -19,3 +19,9 @@ langchain>=0.2.0
 langchain-community>=0.2.0
 langchain-openai>=0.1.0
 langchain-text-splitters>=0.2.0
+
+# Phase 6 — Containerized test runner
+docker>=7.0.0
+
+# sdet workflow (PRD -> test plan)
+jsonschema>=4.0.0

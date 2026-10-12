@@ -1,0 +1,102 @@
+# Phase 6 — Kubernetes Job manifest for containerized eval suite execution
+#
+# Each suite runs as an independent K8s Job (one Pod).
+# Deploy one Job per suite for parallel execution, or use a
+# Job array controller (e.g., Argo Workflows, Kueue) for fleet dispatch.
+#
+# Usage:
+#   # Replace placeholders, then apply:
+#   SUITE=test_cases/basic_qa.yaml
+#   SUITE_SLUG=$(echo $SUITE | tr '/' '-' | tr '.' '-')
+#
+#   sed "s|__SUITE__|$SUITE|g; s|__SUITE_SLUG__|$SUITE_SLUG|g" \
+#     phase6/k8s_job.yaml | kubectl apply -f -
+#
+#   # Watch progress:
+#   kubectl get jobs -l app=eval-harness
+#   kubectl logs -l suite=$SUITE_SLUG --follow
+#
+# For a full multi-suite run, use phase6/container_runner.py which
+# handles Docker-local orchestration. This manifest is provided for
+# K8s deployment contexts (staging / CI clusters).
+
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: eval-harness-__SUITE_SLUG__
+  labels:
+    app: eval-harness
+    phase: "6"
+    suite: __SUITE_SLUG__
+spec:
+  # Retry once on failure (transient network/API errors)
+  backoffLimit: 1
+
+  # Auto-clean completed jobs after 1 hour
+  ttlSecondsAfterFinished: 3600
+
+  template:
+    metadata:
+      labels:
+        app: eval-harness
+        suite: __SUITE_SLUG__
+    spec:
+      restartPolicy: Never
+
+      containers:
+        - name: eval-runner
+          image: eval-harness:phase6    # replace with your registry path
+          imagePullPolicy: IfNotPresent
+
+          command:
+            - python
+            - run_evals.py
+            - --suite
+            - __SUITE__
+            - --format
+            - json
+            - --min-pass-rate
+            - "0.8"
+            - --variance-runs
+            - "1"
+
+          env:
+            - name: OPENAI_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: eval-harness-secrets
+                  key: openai-api-key
+
+            - name: EVAL_SUITE
+              value: __SUITE__
+
+          resources:
+            requests:
+              cpu: "500m"
+              memory: "512Mi"
+            limits:
+              cpu: "1000m"
+              memory: "1Gi"
+
+          # Results written to stdout; collect with:
+          #   kubectl logs <pod-name>
+          # or mount a shared volume / emit to object storage for aggregation.
+
+      # Pull image from private registry if needed
+      # imagePullSecrets:
+      #   - name: registry-credentials
+
+---
+# Secret template — populate with your actual key before applying.
+# In practice, use Sealed Secrets, Vault, or your cloud KMS.
+#
+# kubectl create secret generic eval-harness-secrets \
+#   --from-literal=openai-api-key=$OPENAI_API_KEY
+#
+# apiVersion: v1
+# kind: Secret
+# metadata:
+#   name: eval-harness-secrets
+# type: Opaque
+# stringData:
+#   openai-api-key: "sk-..."

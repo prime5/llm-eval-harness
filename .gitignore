@@ -16,3 +16,14 @@ phase5/data/chroma_db/
 phase5/data/rag_eval_results.json
 phase5/data/rag_baseline.json
 phase5/data/rag_drift.json
+
+# Phase 6 — Containerized runner temp results
+phase6/.results/
+phase6_results.json
+
+# Virtualenv
+.venv/
+venv/
+
+# sdet — generated plans
+sdet/out/
